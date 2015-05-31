@@ -11,6 +11,296 @@ class RequestError(Exception):
 
 
 
+UCSTATE_START = 18
+# big guess
+ULSTATE_START = 142
+
+def ucrange(start, stop):
+    start += UCSTATE_START
+    stop += UCSTATE_START
+    return range(start, stop)
+
+
+class Offset(object):
+    def __init__(self, data, number):
+        # data is read(bcs_proc.cfg).split(',').
+        self.data = data
+        self.number = number
+
+    def __getitem__(self, idx):
+        return self.data[idx+self.number]
+
+    def __setitem__(self, idx, value):
+        self.data[idx+self.number] = value
+
+
+class Timer(Offset):
+    """There are 4 of these per state."""
+    def __init__(self, data, number):
+        assert 0 <= number < 4
+        super(Timer, self).__init__(data, number)
+
+    @property
+    def name(self):
+        return self[10]
+
+    @name.setter
+    def name(self, value):
+        self[10] = value
+
+    @property
+    def enabled(self):
+        return self[UCSTATE_START+18]
+
+    @enabled.setter
+    def enabled(self, value):
+        self[UCSTATE_START+18] = value
+
+    @property
+    def up_not_down(self):
+        return self[UCSTATE_START+22]
+
+    @up_not_down.setter
+    def up_not_down(self, value):
+        self[UCSTATE_START+22] = value
+
+    @property
+    def initial(self):
+        return self[ULSTATE_START]
+
+    @initial.setter
+    def initial(self, value):
+        self[ULSTATE_START] = value
+
+
+class OutputControl(Offset):
+    """There are 5 of these per state."""
+    def __init__(self, data, number):
+        assert 0 <= number < 5
+        super(Timer, self).__init__(data, number)
+
+    @property
+    def control_type(self):
+        return self[UCSTATE_START]
+
+    @control_type.setter
+    def control_type(self, value):
+        self[UCSTATE_START] = value
+
+    @property
+    def control_value(self):
+        return self[UCSTATE_START+26]
+
+    @control_value.setter
+    def control_value(self, value):
+        self[UCSTATE_START+26] = value
+
+    @property
+    def temp_setpoint(self):
+        return self[ULSTATE_START+4]
+
+    @temp_setpoint.setter
+    def temp_setpoint(self, value):
+        self[ULSTATE_START+4] = value
+
+
+class ExitCondition(Offset):
+    def __init__(self, data, number):
+        assert 0 <= number < 5
+        super(Timer, self).__init__(data, number)
+
+    @property
+    def temp_exit(self):
+        for count, idx in enumerate(ucrange(32, 36)):
+            if self[idx] == 0:
+                continue
+            elif self[idx] == 1:
+                return count
+            elif self[idx] == 2:
+                return count + 4
+            else:
+                raise ValueError('Got {}, expected (0, 1, 2)'.format(self[idx]))
+
+    @temp_exit.setter
+    def temp_exit(self, value):
+        assert value is None or 0 <= value < 8, 'Temperature value out of range'
+        for count, idx in enumerate(ucrange(32, 36)):
+            if value is not None and (value % 4) == count:
+                self[idx] = value//4 + 1
+            else:
+                self[idx] = 0
+
+    @property
+    def time_exit(self):
+        for count, idx in enumerate(ucrange(48, 52)):
+            if self[idx] == 0:
+                continue
+            elif self[idx] == 1:
+                return count
+            else:
+                raise ValueError('Got {}, expected (1, 2)'.format(self[idx]))
+
+    @time_exit.setter
+    def time_exit(self):
+        assert value is None or 0 <= value < 4, 'Timer value out of range'
+        for count, idx in enumerate(ucrange(48, 52)):
+            if value is not None and value == count:
+                self[idx] = 1
+            else:
+                self[idx] = 0
+
+    @property
+    def discrete_input_exit(self):
+        for count, idx in enumerate(ucrange(64, 68)):
+            if self[idx] == 0:
+                continue
+            elif self[idx] == 1:
+                return count
+            elif self[idx] == 6:
+                return count + 4
+            else:
+                raise ValueError('Got {}, expected (0, 1, 6)'.format(self[idx]))
+
+    @discrete_input_exit.setter
+    def discrete_input_exit(self, value):
+        assert value is None or 0 <= value < 8, 'Discrete input out of range'
+        for count, idx in enumerate(ucrange(64, 68)):
+            if value is not None and (value % 4) == count:
+                self[idx] = 1 + (5 * (value//4))
+            else:
+                self[idx] = 0
+
+
+    @property
+    def web_input_exit(self):
+        for count, idx in enumerate(ucrange(80, 84)):
+            if self[idx] == 0:
+                continue
+            elif self[idx] == 1:
+                return count
+            else:
+                raise ValueError('Got {}, expected (1, 2)'.format(self[idx]))
+
+    @web_input_exit.setter
+    def web_input_exit(self, value):
+        assert value is None or 0 <= value < 4, 'Web input out of range'
+        for count, idx in enumerate(ucrange(80, 84)):
+            if value is not None and value == count:
+                self[idx] = 1
+            else:
+                self[idx] = 0
+
+    @property
+    def next_state(self):
+        return self[UCSTATE_START+96]
+
+    @next_state.setter
+    def next_state(self, value):
+        self[UCSTATE_START+96] = value
+
+    @property
+    def test_value(self):
+        return self[UCSTATE_START+100]
+
+    @test_value.setter
+    def test_value(self, value):
+        self[UCSTATE_START+100] = value
+
+    @property
+    def value_is_greater_than(self):
+        return self[UCSTATE_START+108]
+
+    @value_is_greater_than.setter
+    def value_is_greater_than(self, value):
+        self[UCSTATE_START+108] = value
+
+    @property
+    def temperature(self):
+        return self[ULSTATE_START+10]
+
+    @temperature.setter
+    def temperature(self, value):
+        self[ULSTATE_START+10] = value
+
+    @property
+    def time(self):
+        return self[ULSTATE_START+14]
+
+    @time.setter
+    def time(self, value):
+        self[ULSTATE_START+14] = value
+
+
+
+class State(Offset):
+    def __init__(self, data, number):
+        assert 0 <= number < 8, 'Invalid state number'
+        super(State, self).__init__(data, number)
+        self.timers = [Timer(data, x) for x in range(4)]
+        self.output = [OutputControl(data, x) for x in range(5)]
+        self.exit_conditions = [ExitCondition(data, x) for x in range(5)]
+
+    @property
+    def name(self):
+        return self[2]
+
+    @name.setter
+    def name(self, value):
+        self[2] = value
+
+
+class Process(object):
+    def __init__(self, data):
+        self.data = data
+        # this is probably wrong, have to figure out how to query bcs_proc about states.
+        # does it just append their ucstate/ulstate one after the other?
+        self.states = [State(data, x) for x in range(8)]
+
+    def __getitem__(self, key):
+        return self.data[key]
+
+    def __setitem__(self, key, value):
+        self.data[key] = value
+
+    @property
+    def name(self):
+        return self.data[1]
+
+    @name.setter
+    def name(self, value):
+        self.data[1] = value
+
+    @property
+    def state_names(self):
+        return self.data[2:10]
+
+    @state_names.setter
+    def state_names(self, values):
+        for idx, value in enumerate(values, start=2):
+            self.data[idx] = value
+
+    @property
+    def timer_names(self):
+        return self.data[10:14]
+
+    @timer_names.setter
+    def timer_names(self, values):
+        for idx, value in enumerate(values, start=10):
+            self.data[idx] = value
+
+    @property
+    def web_input_names(self):
+        return self.data[14:18]
+
+    @web_input_names.setter
+    def web_input_names(self, values):
+        for idx, value in enumerate(values, start=14):
+            self.data[idx] = value
+
+
+
+
+
 class Client(object):
     """A client. Just to store that stupid address parameter.
 
