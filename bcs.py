@@ -1,117 +1,129 @@
+from __future__ import division, unicode_literals, print_function, absolute_import
+import itertools
+import requests
+
+class RequestError(Exception):
+    """An error in the http get/post request."""
+    def __init__(self, response):
+        self.response = response
+        message = 'Error {}: {}'.format(response.status_code, response.text)
+        super(RequestError, self).__init__(message, self.response)
 
 
-def get_bcs(address, filename, params=None):
-    """Get the "Open interface file" specified"""
-    url = '{}/{}'.format(address, filename)
-    result = requests.get(url, params=params)
-    if not result.ok:
-        raise RequestError(result)
-    return result.text
 
+class Client(object):
+    """A client. Just to store that stupid address parameter.
 
-def put_bcs(address, filename, data, params):
-    """Post the "Open interface file" specified"""
-    url = '{}/{}'.format(address, filename)
-    result = requests.post(url, data=data, params=params)
-    if not result.ok:
-        raise RequestError(result)
-    return result.text
-
-
-def _name_fields(process_num):
-    if process_num < 4:
-        procname_idx = 1 + process_num
-        state_start = 5 + (process_num * 8)
-        win_start = 47 + (process_num * 4)
-        timer_start = 67 + (process_num * 4)
-    elif process_num < 8:
-        procname_idx = 105 + (process_num - 4)
-        state_start = 109 + ((process_num - 4) * 8)
-        win_start = 141 + ((process_num - 4) * 4)
-        timer_start = 157 + ((process_num - 4) * 4)
-    else:
-        raise ValueError('Process number must be <8 and > 0')
-    return procname_idx, state_start, win_start, timer_start
-
-
-def get_process_name(address, process_num):
-    """Get the name information about a process.
-    First query the relevant names and pull them out of sysname.dat.
-    Then query the ulstate/ucstate.dat files.
+    :param ivar address: The address of the client.
     """
-    data = get_bcs(address, 'sysname.dat')
-    fields = data.split(',')
-    procname_idx, state_start, win_start, timer_start = _name_fields(process_num)
-    return {
-        'process_name': fields[procname_idx],
-        'state_names': [x for x in fields[state_start:state_start+8]]
-        'web_input_names': [x for x in fields[win_start:win_start+4]]
-        'timer_names': [x for x in fields[timer_start:timer_start+4]]
-    }
+    def __init__(self, address):
+        self.address = address
+
+    def get(self, filename, params=None):
+        """Get the "Open interface file" specified as a csv string.
+
+        :param str filename: The filename to get
+        :param str params: The parameters string to use '(?p=x&s=y' to get process x state y, maybe).
+        """
+        url = '{}/{}'.format(self.address, filename)
+        result = requests.get(url, params=params)
+        if not result.ok:
+            raise RequestError(result)
+        return result.text
+
+    def put_bcs(self, filename, data, params):
+        """Post the "Open interface file" specified"""
+        url = '{}/{}'.format(self.address, filename)
+        result = requests.post(url, data=data, params=params)
+        if not result.ok:
+            raise RequestError(result)
+        return result.text
+
+    def get_process_name(self, process_num):
+        """Get the name information about a process.
+        First query the relevant names and pull them out of sysname.dat.
+        Then query the ulstate/ucstate.dat files.
+        """
+        assert 0 <= process_num < 8, 'invalid process number'
+        data = get_bcs('bcs_proc.cfg', params='?p={}&'.format(process_num)).split(',')
+        fields = data.split(',')
+        return {
+            'process_name': fields[1],
+            'state_names': fields[2:10],
+            'timer_names': fields[10:14],
+            'web_input_names': fields[14:18]
+        }
+
+    def get_state_info(self, process_num, state_num):
+        """Each process has 8 states.
+
+        TODO: Instead of just lists, build thesem into some more useful representation.
+        """
+        # TODO: Figure out which temperature/output sensors are used and stub out the fields
+        # with a marker. Then do the reverse on set_state_info
+        params = 'p={}&s={}'.format(process_num, state_num)
+        return {
+            'ulstate': self.get_bcs('ulstate.dat', params).split(',')
+            'ucstate': self.get_bcs('ucstate.dat', params).split(',')
+        }
 
 
-def set_process_name(address, process_num, process):
-    """Set the name information about a process.
-    First query the existing information, then replace that with new information.
-    """
-    data = get_bcs(address, 'sysname.dat')
-    existing = data.split(',')
-    procname_idx, state_start, win_start, timer_start = _name_fields(process_num)
-    existing[procname_idx] = process['process_name']
-    for idx, value in zip(range(state_start, state_start+8), process['state_names']):
-        existing[idx] = value
-    for idx, value in zip(range(win_start, win_start+4), process['web_input_names']):
-        existing[idx] = value
-    for idx, value in zip(range(timer_start, timer_start+4), process['timer_names']):
-        existing[idx] = value
-    # can't use dict form of params because order matters (wtf) and you can't get ?data& that way.
-    put_bcs(address, 'sysname.dat', ','.join(existing), params='data&p=0&s=0')
+    def get_process(self, process_num):
+        """Return a process as a dictionary.
+
+        TODO: Figure out how bcs_proc.cfg is laid out. Is it just appended?
+        It might be easier to use that than to use the individual docs. But
+        first we have to figure out if they're just concatenated or if they
+        have separators, etc. Check w/ actual BCS unit.
+        """
+        return {
+            'names': self.get_process_name(process_num),
+            'states': [self.get_state_info(process_num, state_num)
+                       for state_num in range(8)]
+        }
+
+    def set_process_name(self, process_num, process):
+        """Set the name information about a process.
+        First query the existing information, then replace that with new information.
+        """
+        data = self.get_bcs('bcs_proc.cfg')
+        fields = data.split(',')
+        fields[1] = process['process_name']
+        fields = itertools.chain(
+            enumerate(process['state_names'], start=2),
+            enumerate(process['timer_names'], start=10),
+            enumerate(process['web_input_names'], start=14)
+        )
+        newdata = ','.join(fields)
+        # PUT the new list. the params field is required.
+        # TODO: TEST: It may be required as a parameter instead of data? Docs are unclear.
+        # can't use dict form of params because order matters (wtf) and you can't get ?data& that way.
+        self.put_bcs('sysname.dat', newdata, params='data&p=0&s=0')
 
 
+    def set_state_info(self, process_num, state_num, state_data):
+        """Set the state info."""
+        params = 'p={}&s={}'.format(process_num, state_num)
+        self.put_bcs('ulstate.dat', ','.join(state_data['ulstate']), params)
+        self.put_bcs('ucstate.dat', ','.join(state_data['ucstate']), params)
 
-def get_state_info(address, process_num, state_num):
-    """Each process has 8 states."""
-    # TODO: Figure out which temperature/output sensors are used and stub out the fields
-    # with a marker. Then do the reverse on set_state_info
-    params = 'p={}&s={}'.format(process_num, state_num)
-    return {
-        'ulstate': get_bcs(address, 'ulstate.dat', params).split(',')
-        'ucstate': get_bcs(address, 'ucstate.dat', params).split(',')
-    }
+    def set_process(self, process_num, process_data):
+        """Set a process based on the given data.
 
+        TODO: Same considerations as get_process
+        """
+        self.set_process_name(process_num, process_data['names'])
+        for state_num, state_data in enumerate(process_num['states']):
+            self.set_state_info(process_num, state_num, state_data)
 
-def set_state_info(address, process_num, state_num, state_data):
-    params = 'p={}&s={}'.format(process_num, state_num)
-    put_bcs(address, 'ulstate.dat', ','.join(state_data['ulstate']), params)
-    put_bcs(address, 'ucstate.dat', ','.join(state_data['ucstate']), params)
+    def get_process_to_file(self, process_num, path):
+        process_data = self.get_process(process_num)
+        with open(path, 'w') as fp:
+            json.dump(process_data, fp)
 
-
-def get_process(address, process_num):
-    """Return a process as a dictionary."""
-    return {
-        'names': get_process_name(address, process_num),
-        'states': [get_state_info(address, process_num, state_num)
-                   for state_num in range(8)]
-    }
-
-
-
-def set_process(address, process_num, process_data):
-    """Set a process based on the given data."""
-    set_process_name(address, process_num, process_data['names'])
-    for state_num, state_data in enumerate(process_num['states']):
-        set_state_info(address, process_num, state_num, state_data)
-
-
-def get_process_to_file(address, process_num, path):
-    process_data = get_process(address, process_num)
-    with open(path, 'w') as fp:
-        json.dump(process_data, fp)
-
-
-def set_process_from_file(address, process_num, path):
-    with open(path, 'r') as fp:
-        process_data = json.load(fp)
-    set_process(address, process_num, process_data)
+    def set_process_from_file(self, process_num, path):
+        with open(path, 'r') as fp:
+            process_data = json.load(fp)
+        self.set_process(process_num, process_data)
 
 
