@@ -15,10 +15,9 @@ UCSTATE_START = 18
 # big guess
 ULSTATE_START = 142
 
-def ucrange(start, stop):
-    start += UCSTATE_START
-    stop += UCSTATE_START
-    return range(start, stop)
+HEADER_LENGTH = 18
+UCSTATE_LENGTH = 124
+ULSTATE_LENGTH = 32
 
 
 class Offset(object):
@@ -34,201 +33,242 @@ class Offset(object):
         self.data[idx+self.number] = value
 
 
-class Timer(Offset):
+class StateOffset(object):
+    def __init__(self, data, number, state):
+        assert 0 <= state < 8
+        self.data = data
+        self.number = number
+        self.state = state
+
+    def _head_idx(self, idx, ucstate=False, ulstate=False):
+        assert not (ucstate and ulstate)
+        result = idx + self.number
+        if ucstate:
+            result += HEADER_LENGTH + (UCSTATE_LENGTH * self.state)
+        elif ulstate:
+            result += HEADER_LENGTH + (UCSTATE_LENGTH * 8) + (ULSTATE_LENGTH * self.state)
+        return result
+
+    def get_header(self, idx):
+        return self.data[self._head_idx(idx)]
+
+    def set_header(self, idx, value):
+        self.data[self._head_idx(idx)] = value
+
+    def get_ucstate(self, idx):
+        return self.data[self._head_idx(idx, ucstate=True)]
+
+    def set_ucstate(self, idx, value):
+        self.data[self._head_idx(idx, ucstate=True)] = value
+
+    def get_ulstate(self, idx):
+        return self.data[self._head_idx(idx, ulstate=True)]
+
+    def set_ulstate(self, idx, value):
+        self.data[self._head_idx(idx, ulstate=True)] = value
+
+class Timer(StateOffset):
     """There are 4 of these per state."""
-    def __init__(self, data, number):
+    def __init__(self, data, number, state):
         assert 0 <= number < 4
-        super(Timer, self).__init__(data, number)
+        super(Timer, self).__init__(data, number, state)
+
+    def __str__(self):
+        return 'Timer {0.name}: enabled={0.enabled}, up_not_down={0.up_not_down}, initial={0.initial}'.format(self)
 
     @property
     def name(self):
-        return self[10]
+        return self.get_header(10)
 
     @name.setter
     def name(self, value):
-        self[10] = value
+        self.set_header(10, value)
 
     @property
     def enabled(self):
-        return self[UCSTATE_START+18]
+        return self.get_ucstate(18)
 
     @enabled.setter
     def enabled(self, value):
-        self[UCSTATE_START+18] = value
+        self.set_ucstate(18, value)
 
     @property
     def up_not_down(self):
-        return self[UCSTATE_START+22]
+        return self.get_ucstate(22)
 
     @up_not_down.setter
     def up_not_down(self, value):
-        self[UCSTATE_START+22] = value
+        self.set_ucstate(22, value)
 
     @property
     def initial(self):
-        return self[ULSTATE_START]
+        return self.get_ulstate(0)
 
     @initial.setter
     def initial(self, value):
-        self[ULSTATE_START] = value
+        self.set_ulstate(0, value)
 
 
-class OutputControl(Offset):
+class OutputControl(StateOffset):
     """There are 5 of these per state."""
-    def __init__(self, data, number):
+    def __init__(self, data, number, state):
         assert 0 <= number < 5
-        super(Timer, self).__init__(data, number)
+        super(OutputControl, self).__init__(data, number, state)
 
     @property
     def control_type(self):
-        return self[UCSTATE_START]
+        return self.get_ucstate(0)
 
     @control_type.setter
     def control_type(self, value):
-        self[UCSTATE_START] = value
+        self.set_ucstate(0, value)
 
     @property
     def control_value(self):
-        return self[UCSTATE_START+26]
+        return self.get_ucstate(26)
 
     @control_value.setter
     def control_value(self, value):
-        self[UCSTATE_START+26] = value
+        self.set_ucstate(26, value)
 
     @property
     def temp_setpoint(self):
-        return self[ULSTATE_START+4]
+        return self.get_ulstate(4)
 
     @temp_setpoint.setter
     def temp_setpoint(self, value):
-        self[ULSTATE_START+4] = value
+        self.set_ulstate(4, value)
 
 
-class ExitCondition(Offset):
-    def __init__(self, data, number):
+class ExitCondition(StateOffset):
+    def __init__(self, data, number, state):
         assert 0 <= number < 5
-        super(Timer, self).__init__(data, number)
+        super(ExitCondition, self).__init__(data, number, state)
 
     @property
     def temp_exit(self):
-        for count, idx in enumerate(ucrange(32, 36)):
-            if self[idx] == 0:
+        for count, idx in enumerate(range(32, 36)):
+            found = int(self.get_ucstate(idx))
+            if found == 0:
                 continue
-            elif self[idx] == 1:
+            elif found == 1:
                 return count
-            elif self[idx] == 2:
+            elif found == 2:
                 return count + 4
             else:
-                raise ValueError('Got {}, expected (0, 1, 2)'.format(self[idx]))
+                raise ValueError('Got {}, expected (0, 1, 2)'.format(found))
 
     @temp_exit.setter
     def temp_exit(self, value):
         assert value is None or 0 <= value < 8, 'Temperature value out of range'
-        for count, idx in enumerate(ucrange(32, 36)):
+        for count, idx in enumerate(range(32, 36)):
             if value is not None and (value % 4) == count:
-                self[idx] = value//4 + 1
+                self.set_ucstate(idx, str(value//4 + 1))
             else:
-                self[idx] = 0
+                self.set_ucstate(idx, '0')
 
     @property
     def time_exit(self):
-        for count, idx in enumerate(ucrange(48, 52)):
-            if self[idx] == 0:
+        for count, idx in enumerate(range(48, 52)):
+            found = int(self.get_ucstate(idx))
+            if found == 0:
                 continue
-            elif self[idx] == 1:
+            elif found == 1:
                 return count
             else:
-                raise ValueError('Got {}, expected (1, 2)'.format(self[idx]))
+                raise ValueError('Got {}, expected (1, 2)'.format(found))
 
     @time_exit.setter
     def time_exit(self):
         assert value is None or 0 <= value < 4, 'Timer value out of range'
-        for count, idx in enumerate(ucrange(48, 52)):
+        for count, idx in enumerate(range(48, 52)):
             if value is not None and value == count:
-                self[idx] = 1
+                self.set_ucstate(idx, '1')
             else:
-                self[idx] = 0
+                self.set_ucstate(idx, '0')
 
     @property
     def discrete_input_exit(self):
-        for count, idx in enumerate(ucrange(64, 68)):
-            if self[idx] == 0:
+        for count, idx in enumerate(range(64, 68)):
+            found = int(self.get_ucstate(idx))
+            if found == 0:
                 continue
-            elif self[idx] == 1:
+            elif found == 1:
                 return count
-            elif self[idx] == 6:
+            elif found == 6:
                 return count + 4
             else:
-                raise ValueError('Got {}, expected (0, 1, 6)'.format(self[idx]))
+                raise ValueError('Got {}, expected (0, 1, 6)'.format(found))
 
     @discrete_input_exit.setter
     def discrete_input_exit(self, value):
         assert value is None or 0 <= value < 8, 'Discrete input out of range'
-        for count, idx in enumerate(ucrange(64, 68)):
+        for count, idx in enumerate(range(64, 68)):
             if value is not None and (value % 4) == count:
-                self[idx] = 1 + (5 * (value//4))
+                self.set_ucstate(idx, str(5 * (value//4)))
             else:
-                self[idx] = 0
+                self.set_ucstate(idx, '0')
 
 
     @property
     def web_input_exit(self):
-        for count, idx in enumerate(ucrange(80, 84)):
-            if self[idx] == 0:
+        for count, idx in enumerate(range(80, 84)):
+            found = int(self.get_ucstate(idx))
+            if found == 0:
                 continue
-            elif self[idx] == 1:
+            elif found == 1:
                 return count
             else:
-                raise ValueError('Got {}, expected (1, 2)'.format(self[idx]))
+                raise ValueError('Got {}, expected (1, 2)'.format(found))
 
     @web_input_exit.setter
     def web_input_exit(self, value):
         assert value is None or 0 <= value < 4, 'Web input out of range'
-        for count, idx in enumerate(ucrange(80, 84)):
+        for count, idx in enumerate(range(80, 84)):
             if value is not None and value == count:
-                self[idx] = 1
+                self.set_ucstate(idx, '1')
             else:
-                self[idx] = 0
+                self.set_ucstate(idx, '0')
 
     @property
     def next_state(self):
-        return self[UCSTATE_START+96]
+        return self.get_ucstate(96)
 
     @next_state.setter
     def next_state(self, value):
-        self[UCSTATE_START+96] = value
+        self.set_ucstate(96, value)
 
     @property
     def test_value(self):
-        return self[UCSTATE_START+100]
+        return self.get_ucstate(100)
 
     @test_value.setter
     def test_value(self, value):
-        self[UCSTATE_START+100] = value
+        self.set_ucstate(100, value)
 
     @property
     def value_is_greater_than(self):
-        return self[UCSTATE_START+108]
+        return self.get_ucstate(108)
 
     @value_is_greater_than.setter
     def value_is_greater_than(self, value):
-        self[UCSTATE_START+108] = value
+        self.set_ucstate(108, value)
 
     @property
     def temperature(self):
-        return self[ULSTATE_START+10]
+        return self.get_ulstate(10)
 
     @temperature.setter
     def temperature(self, value):
-        self[ULSTATE_START+10] = value
+        self.set_ulstate(10, value)
 
     @property
     def time(self):
-        return self[ULSTATE_START+14]
+        return self.get_ulstate(14)
 
     @time.setter
     def time(self, value):
-        self[ULSTATE_START+14] = value
+        self.set_ulstate(14, value)
 
 
 
@@ -236,17 +276,21 @@ class State(Offset):
     def __init__(self, data, number):
         assert 0 <= number < 8, 'Invalid state number'
         super(State, self).__init__(data, number)
-        self.timers = [Timer(data, x) for x in range(4)]
-        self.output = [OutputControl(data, x) for x in range(5)]
-        self.exit_conditions = [ExitCondition(data, x) for x in range(5)]
+        self.timers = [Timer(data, x, number) for x in range(4)]
+        self.output = [OutputControl(data, x, number) for x in range(5)]
+        self.exit_conditions = [ExitCondition(data, x, number) for x in range(5)]
+
+    def __str__(self):
+        return ('State {0.name}:\n\ttimers={0.timers}\n\toutput={0.output}'
+                '\n\texit_conditions={0.exit_conditions}').format(self)
 
     @property
     def name(self):
-        return self[2]
+        return self.get_header(2)
 
     @name.setter
     def name(self, value):
-        self[2] = value
+        self.set_header(2, value)
 
 
 class Process(object):
@@ -296,9 +340,6 @@ class Process(object):
     def web_input_names(self, values):
         for idx, value in enumerate(values, start=14):
             self.data[idx] = value
-
-
-
 
 
 class Client(object):
@@ -353,7 +394,7 @@ class Client(object):
         # with a marker. Then do the reverse on set_state_info
         params = 'p={}&s={}'.format(process_num, state_num)
         return {
-            'ulstate': self.get_bcs('ulstate.dat', params).split(',')
+            'ulstate': self.get_bcs('ulstate.dat', params).split(','),
             'ucstate': self.get_bcs('ucstate.dat', params).split(',')
         }
 
@@ -365,6 +406,13 @@ class Client(object):
         It might be easier to use that than to use the individual docs. But
         first we have to figure out if they're just concatenated or if they
         have separators, etc. Check w/ actual BCS unit.
+
+        TODO: The way bcs_proc.cfg is laid out
+            - the defined header stuff
+            - ucstate.dat for state 0
+            - ucstate.dat for state ...
+            - ulstate.dat for state 0
+            - ulstate.dat for state ...
         """
         return {
             'names': self.get_process_name(process_num),
