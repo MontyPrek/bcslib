@@ -265,13 +265,13 @@ class ExitCondition(StateOffset):
 
 
 class State(StateOffset):
-    def __init__(self, data, number):
-        assert 0 <= number < 8, 'Invalid state number'
+    def __init__(self, data, state):
+        assert 0 <= state < 8, 'Invalid state number'
         self.data = data
-        self.number = number
-        self.timers = [Timer(data, x, number) for x in range(4)]
-        self.output = [OutputControl(data, x, number) for x in range(5)]
-        self.exit_conditions = [ExitCondition(data, x, number) for x in range(5)]
+        self.state = state
+        self.timers = [Timer(data, x, state) for x in range(4)]
+        self.output = [OutputControl(data, x, state) for x in range(5)]
+        self.exit_conditions = [ExitCondition(data, x, state) for x in range(5)]
 
     def __str__(self):
         return ('State {0.name}:\n\ttimers={0.timers}\n\toutput={0.output}'
