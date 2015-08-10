@@ -25,20 +25,6 @@ HEADER_LENGTH = 18
 UCSTATE_LENGTH = 124
 ULSTATE_LENGTH = 32
 
-
-class Offset(object):
-    def __init__(self, data, number):
-        # data is read(bcs_proc.cfg).split(',').
-        self.data = data
-        self.number = number
-
-    def __getitem__(self, idx):
-        return self.data[idx+self.number]
-
-    def __setitem__(self, idx, value):
-        self.data[idx+self.number] = value
-
-
 class StateOffset(object):
     def __init__(self, data, number, state):
         assert 0 <= state < 8
@@ -278,10 +264,11 @@ class ExitCondition(StateOffset):
 
 
 
-class State(Offset):
+class State(StateOffset):
     def __init__(self, data, number):
         assert 0 <= number < 8, 'Invalid state number'
-        super(State, self).__init__(data, number)
+        self.data = data
+        self.number = number
         self.timers = [Timer(data, x, number) for x in range(4)]
         self.output = [OutputControl(data, x, number) for x in range(5)]
         self.exit_conditions = [ExitCondition(data, x, number) for x in range(5)]
