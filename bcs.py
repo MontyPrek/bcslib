@@ -296,7 +296,7 @@ class Process(object):
 
     @property
     def name(self):
-        return self.data[1]
+        return self.data[1].rstrip()
 
     @name.setter
     def name(self, value):
