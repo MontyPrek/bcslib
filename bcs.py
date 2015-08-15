@@ -16,11 +16,6 @@ class IllegalRequestError(Exception):
         message = 'Error: {} cannot be {}'.format(attempt['name'], attempt['val'])
         super(IllegalRequestError, self).__init__(message, self.attempt)
 
-
-UCSTATE_START = 18
-# big guess
-ULSTATE_START = 142
-
 HEADER_LENGTH = 18
 UCSTATE_LENGTH = 124
 ULSTATE_LENGTH = 32
@@ -42,7 +37,7 @@ class StateOffset(object):
         return result
 
     def get_header(self, idx):
-        return self.data[self._head_idx(idx)]
+        return self.data[self._head_idx(idx)].rstrip()
 
     def set_header(self, idx, value):
         self.data[self._head_idx(idx)] = value
@@ -66,7 +61,8 @@ class Timer(StateOffset):
         super(Timer, self).__init__(data, number, state)
 
     def __str__(self):
-        return 'Timer {0.name}: enabled={0.enabled}, up_not_down={0.up_not_down}, initial={0.initial}'.format(self)
+        return 'Timer {0.name}: enabled={0.enabled}, up_not_down={0.up_not_down}, \
+                initial={0.initial}'.format(self)
 
     @property
     def name(self):
@@ -267,8 +263,7 @@ class ExitCondition(StateOffset):
 class State(StateOffset):
     def __init__(self, data, state):
         assert 0 <= state < 8, 'Invalid state number'
-        self.data = data
-        self.state = state
+        super(State, self).__init__(data, state, state)
         self.timers = [Timer(data, x, state) for x in range(4)]
         self.output = [OutputControl(data, x, state) for x in range(5)]
         self.exit_conditions = [ExitCondition(data, x, state) for x in range(5)]
@@ -347,7 +342,7 @@ class Client(object):
         """Get the "Open interface file" specified as a csv string.
 
         :param str filename: The filename to get
-        :param str params: The parameters string to use '(?p=x&s=y' to get process x state y, maybe).
+        :param str params: The parameters string to use ('?p=x&s=y' to get process x state y, maybe).
         """
         url = '{}/{}'.format(self.address, filename)
         result = requests.get(url, params=params)
@@ -395,7 +390,7 @@ class Client(object):
         newdata = ','.join(fields)
         # PUT the new list. the params field is required.
         # TODO: TEST: It may be required as a parameter instead of data? Docs are unclear.
-        # can't use dict form of params because order matters (wtf) and you can't get ?data& that way.
+        # can't use dict form of params because order matters (wtf) and you can't get ?data& that wa
         self.post_bcs('sysname.dat', newdata, params='data&p=0&s=0')
 
 
