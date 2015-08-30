@@ -55,7 +55,8 @@ class StateOffset(object):
         self.data[self._head_idx(idx, ulstate=True)] = value
 
 class Timer(StateOffset):
-    """There are 4 of these per state."""
+    """There are 4 of these per process, shared across the states. Each state has individual\
+       settings for each timer (whether to enable it, etc.)"""
     def __init__(self, data, number, state):
         assert 0 <= number < 4
         super(Timer, self).__init__(data, number, state)
@@ -96,11 +97,12 @@ class Timer(StateOffset):
     def initial(self, value):
         self.set_ulstate(0, value)
 
-
+#TODO:
+# Needs __str__
 class OutputControl(StateOffset):
-    """There are 5 of these per state."""
+    """There are 6 of these per state."""
     def __init__(self, data, number, state):
-        assert 0 <= number < 5
+        assert 0 <= number < 6
         super(OutputControl, self).__init__(data, number, state)
 
     @property
@@ -127,10 +129,11 @@ class OutputControl(StateOffset):
     def temp_setpoint(self, value):
         self.set_ulstate(4, value)
 
-
+#TODO:
+# Needs __str__
 class ExitCondition(StateOffset):
     def __init__(self, data, number, state):
-        assert 0 <= number < 5
+        assert 0 <= number < 4
         super(ExitCondition, self).__init__(data, number, state)
 
     @property
@@ -265,8 +268,8 @@ class State(StateOffset):
         assert 0 <= state < 8, 'Invalid state number'
         super(State, self).__init__(data, state, state)
         self.timers = [Timer(data, x, state) for x in range(4)]
-        self.output = [OutputControl(data, x, state) for x in range(5)]
-        self.exit_conditions = [ExitCondition(data, x, state) for x in range(5)]
+        self.output = [OutputControl(data, x, state) for x in range(6)]
+        self.exit_conditions = [ExitCondition(data, x, state) for x in range(4)]
 
     def __str__(self):
         return ('State {0.name}:\n\ttimers={0.timers}\n\toutput={0.output}'
@@ -304,7 +307,7 @@ class Process(object):
 
     @property
     def state_names(self):
-        return self.data[2:10]
+        return [x.strip() for x in self.data[2:10]]
 
     @state_names.setter
     def state_names(self, values):
@@ -313,7 +316,7 @@ class Process(object):
 
     @property
     def timer_names(self):
-        return self.data[10:14]
+        return [x.strip() for x in self.data[10:14]]
 
     @timer_names.setter
     def timer_names(self, values):
@@ -322,7 +325,7 @@ class Process(object):
 
     @property
     def web_input_names(self):
-        return self.data[14:18]
+        return [x.strip() for x in self.data[14:18]]
 
     @web_input_names.setter
     def web_input_names(self, values):
