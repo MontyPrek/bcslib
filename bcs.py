@@ -390,13 +390,11 @@ class Client(object):
         post_bcs('bcs_proc.cfg', data=process.data, params='?data&p={0}&s={0}&'.format(process_num))
 
     def get_process_to_file(self, process_num, path):
-        process_data = self.get_process(process_num)
+        process_data = self.get_process(process_num).data
         with open(path, 'w') as fp:
             json.dump(process_data, fp)
 
     def set_process_from_file(self, process_num, path):
         with open(path, 'r') as fp:
             process_data = json.load(fp)
-        self.set_process(process_num, process_data)
-
-
+        self.set_process(process_num, Process(process_data))
