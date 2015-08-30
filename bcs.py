@@ -287,8 +287,6 @@ class State(StateOffset):
 class Process(object):
     def __init__(self, data):
         self.data = data
-        # this is probably wrong, have to figure out how to query bcs_proc about states.
-        # does it just append their ucstate/ulstate one after the other?
         self.states = [State(data, x) for x in range(8)]
 
     def __getitem__(self, key):
@@ -378,39 +376,18 @@ class Client(object):
         fields = data.split(',')
         return Process(fields)
 
-    def set_process_name(self, process_num, process):
-        """Set the name information about a process.
-        First query the existing information, then replace that with new information.
+    def set_process(self, process_num, process):
+        """Post the given process to the BCS under the given process number.
+        
+        :param process_num: The number to post the process to
+        :type process_num: int
+        :param process: The process to post
+        :type process: Process
         """
-        data = self.get_bcs('bcs_proc.cfg')
-        fields = data.split(',')
-        fields[1] = process['process_name']
-        fields = itertools.chain(
-            enumerate(process['state_names'], start=2),
-            enumerate(process['timer_names'], start=10),
-            enumerate(process['web_input_names'], start=14)
-        )
-        newdata = ','.join(fields)
-        # PUT the new list. the params field is required.
-        # TODO: TEST: It may be required as a parameter instead of data? Docs are unclear.
-        # can't use dict form of params because order matters (wtf) and you can't get ?data& that wa
-        self.post_bcs('sysname.dat', newdata, params='data&p=0&s=0')
 
-
-    def set_state_info(self, process_num, state_num, state_data):
-        """Set the state info."""
-        params = 'p={}&s={}'.format(process_num, state_num)
-        self.post_bcs('ulstate.dat', ','.join(state_data['ulstate']), params)
-        self.post_bcs('ucstate.dat', ','.join(state_data['ucstate']), params)
-
-    def set_process(self, process_num, process_data):
-        """Set a process based on the given data.
-
-        TODO: Same considerations as get_process
-        """
-        self.set_process_name(process_num, process_data['names'])
-        for state_num, state_data in enumerate(process_num['states']):
-            self.set_state_info(process_num, state_num, state_data)
+        if not 0 <= process_num < 8:
+            raise IllegalRequestError({'name':'Process number', 'val':process_num})
+        post_bcs('bcs_proc.cfg', data=process.data, params='?data&p={0}&s={0}&'.format(process_num))
 
     def get_process_to_file(self, process_num, path):
         process_data = self.get_process(process_num)
