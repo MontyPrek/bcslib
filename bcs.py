@@ -1,6 +1,9 @@
-from __future__ import division, unicode_literals, print_function, absolute_import
-import itertools
+from __future__ import (division, unicode_literals, print_function,
+                        absolute_import)
+import json
+from urllib.parse import urlparse
 import requests
+
 
 class RequestError(Exception):
     """An error in the http get/post request."""
@@ -9,16 +12,20 @@ class RequestError(Exception):
         message = 'Error {}: {}'.format(response.status_code, response.text)
         super(RequestError, self).__init__(message, self.response)
 
+
 class IllegalRequestError(Exception):
     """A request with illegal parameters was attempted"""
     def __init__(self, attempt):
         self.attempt = attempt
-        message = 'Error: {} cannot be {}'.format(attempt['name'], attempt['val'])
+        message = 'Error: {} cannot be {}'.format(attempt['name'],
+                                                  attempt['val'])
         super(IllegalRequestError, self).__init__(message, self.attempt)
+
 
 HEADER_LENGTH = 18
 UCSTATE_LENGTH = 124
 ULSTATE_LENGTH = 32
+
 
 class StateOffset(object):
     def __init__(self, data, number, state):
@@ -33,7 +40,8 @@ class StateOffset(object):
         if ucstate:
             result += HEADER_LENGTH + (UCSTATE_LENGTH * self.state)
         elif ulstate:
-            result += HEADER_LENGTH + (UCSTATE_LENGTH * 8) + (ULSTATE_LENGTH * self.state)
+            result += (HEADER_LENGTH + (UCSTATE_LENGTH * 8) +
+                       (ULSTATE_LENGTH * self.state))
         return result
 
     def get_header(self, idx):
@@ -54,16 +62,20 @@ class StateOffset(object):
     def set_ulstate(self, idx, value):
         self.data[self._head_idx(idx, ulstate=True)] = value
 
+
 class Timer(StateOffset):
-    """There are 4 of these per process, shared across the states. Each state has individual\
-       settings for each timer (whether to enable it, etc.)"""
+    """There are 4 of these per process, shared across the states. Each state
+    has individual
+    settings for each timer (whether to enable it, etc.)
+    """
     def __init__(self, data, number, state):
         assert 0 <= number < 4
         super(Timer, self).__init__(data, number, state)
 
     def __str__(self):
-        return 'Timer {0.name}: enabled={0.enabled}, up_not_down={0.up_not_down}, \
-                initial={0.initial}'.format(self)
+        return ('Timer {0.name}: enabled={0.enabled}, '
+                'up_not_down={0.up_not_down},initial={0.initial}'
+                ).format(self)
 
     @property
     def name(self):
@@ -97,7 +109,8 @@ class Timer(StateOffset):
     def initial(self, value):
         self.set_ulstate(0, value)
 
-#TODO:
+
+# TODO:
 # Needs __str__
 class OutputControl(StateOffset):
     """There are 6 of these per state."""
@@ -129,7 +142,8 @@ class OutputControl(StateOffset):
     def temp_setpoint(self, value):
         self.set_ulstate(4, value)
 
-#TODO:
+
+# TODO:
 # Needs __str__
 class ExitCondition(StateOffset):
     def __init__(self, data, number, state):
@@ -151,7 +165,8 @@ class ExitCondition(StateOffset):
 
     @temp_exit.setter
     def temp_exit(self, value):
-        assert value is None or 0 <= value < 8, 'Temperature value out of range'
+        assert value is None or 0 <= value < 8,\
+            'Temperature value out of range'
         for count, idx in enumerate(range(32, 36)):
             if value is not None and (value % 4) == count:
                 self.set_ucstate(idx, str(value//4 + 1))
@@ -170,8 +185,8 @@ class ExitCondition(StateOffset):
                 raise ValueError('Got {}, expected (1, 2)'.format(found))
 
     @time_exit.setter
-    def time_exit(self):
-        assert value is None or 0 <= value < 4, 'Timer value out of range'
+    def time_exit(self, value):
+        assert value is None or 0 <= value < 4, 'Timer value out of ran218ge'
         for count, idx in enumerate(range(48, 52)):
             if value is not None and value == count:
                 self.set_ucstate(idx, '1')
@@ -199,7 +214,6 @@ class ExitCondition(StateOffset):
                 self.set_ucstate(idx, str(5 * (value//4)))
             else:
                 self.set_ucstate(idx, '0')
-
 
     @property
     def web_input_exit(self):
@@ -262,14 +276,14 @@ class ExitCondition(StateOffset):
         self.set_ulstate(14, value)
 
 
-
 class State(StateOffset):
     def __init__(self, data, state):
         assert 0 <= state < 8, 'Invalid state number'
         super(State, self).__init__(data, state, state)
         self.timers = [Timer(data, x, state) for x in range(4)]
         self.output = [OutputControl(data, x, state) for x in range(6)]
-        self.exit_conditions = [ExitCondition(data, x, state) for x in range(4)]
+        self.exit_conditions = [ExitCondition(data, x, state)
+                                for x in range(4)]
 
     def __str__(self):
         return ('State {0.name}:\n\ttimers={0.timers}\n\toutput={0.output}'
@@ -336,26 +350,31 @@ class Client(object):
 
     :param ivar address: The address of the client.
     """
-    def __init__(self, address):
+    def __init__(self, address, username, password):
+        parsed = urlparse(address)
+        if not parsed.netloc:
+            address = 'http://{}'.format(address)
         self.address = address
+        self.auth = (username, password)
 
     def get_bcs(self, filename, params=None):
         """Get the "Open interface file" specified as a csv string.
 
         :param str filename: The filename to get
-        :param str params: The parameters string to use ('?p=x&s=y' to get process x state y, maybe).
+        :param str params: The parameters string to use
+            ('?p=x&s=y' to get process x state y, maybe).
         """
         url = '{}/{}'.format(self.address, filename)
-        result = requests.get(url, params=params)
-        if not result.reason == 'OK':
+        result = requests.get(url, params=params, auth=self.auth)
+        if not result.ok:
             raise RequestError(result)
         return result.text
 
     def post_bcs(self, filename, data, params):
         """Post the "Open interface file" specified"""
         url = '{}/{}'.format(self.address, filename)
-        result = requests.post(url, data=data, params=params)
-        if not result.reason == 'OK':
+        result = requests.post(url, data=data, params=params, auth=self.auth)
+        if not result.ok:
             raise RequestError(result)
         return result.text
 
@@ -368,17 +387,18 @@ class Client(object):
         :return: A populated process object
         :rtype: Process
         """
-
         if not 0 <= process_num < 8:
-            raise IllegalRequestError({'name':'Process number', 'val':process_num})
+            raise IllegalRequestError({'name': 'Process number',
+                                       'val': process_num})
 
-        data = get_bcs('bcs_proc.cfg', params='?p={}&'.format(process_num))
+        data = self.get_bcs('bcs_proc.cfg',
+                            params='?p={}&'.format(process_num))
         fields = data.split(',')
         return Process(fields)
 
     def set_process(self, process_num, process):
         """Post the given process to the BCS under the given process number.
-        
+
         :param process_num: The number to post the process to
         :type process_num: int
         :param process: The process to post
@@ -386,8 +406,10 @@ class Client(object):
         """
 
         if not 0 <= process_num < 8:
-            raise IllegalRequestError({'name':'Process number', 'val':process_num})
-        post_bcs('bcs_proc.cfg', data=process.data, params='?data&p={0}&s={0}&'.format(process_num))
+            raise IllegalRequestError({'name': 'Process number',
+                                       'val': process_num})
+        self.post_bcs('bcs_proc.cfg', data=process.data,
+                      params='?data&p={0}&s={0}&'.format(process_num))
 
     def get_process_to_file(self, process_num, path):
         process_data = self.get_process(process_num).data
