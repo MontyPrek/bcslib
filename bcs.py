@@ -9,29 +9,16 @@ class RequestError(Exception):
         message = 'Error {}: {}'.format(response.status_code, response.text)
         super(RequestError, self).__init__(message, self.response)
 
-
-
-UCSTATE_START = 18
-# big guess
-ULSTATE_START = 142
+class IllegalRequestError(Exception):
+    """A request with illegal parameters was attempted"""
+    def __init__(self, attempt):
+        self.attempt = attempt
+        message = 'Error: {} cannot be {}'.format(attempt['name'], attempt['val'])
+        super(IllegalRequestError, self).__init__(message, self.attempt)
 
 HEADER_LENGTH = 18
 UCSTATE_LENGTH = 124
 ULSTATE_LENGTH = 32
-
-
-class Offset(object):
-    def __init__(self, data, number):
-        # data is read(bcs_proc.cfg).split(',').
-        self.data = data
-        self.number = number
-
-    def __getitem__(self, idx):
-        return self.data[idx+self.number]
-
-    def __setitem__(self, idx, value):
-        self.data[idx+self.number] = value
-
 
 class StateOffset(object):
     def __init__(self, data, number, state):
@@ -50,7 +37,7 @@ class StateOffset(object):
         return result
 
     def get_header(self, idx):
-        return self.data[self._head_idx(idx)]
+        return self.data[self._head_idx(idx)].rstrip()
 
     def set_header(self, idx, value):
         self.data[self._head_idx(idx)] = value
@@ -68,13 +55,15 @@ class StateOffset(object):
         self.data[self._head_idx(idx, ulstate=True)] = value
 
 class Timer(StateOffset):
-    """There are 4 of these per state."""
+    """There are 4 of these per process, shared across the states. Each state has individual\
+       settings for each timer (whether to enable it, etc.)"""
     def __init__(self, data, number, state):
         assert 0 <= number < 4
         super(Timer, self).__init__(data, number, state)
 
     def __str__(self):
-        return 'Timer {0.name}: enabled={0.enabled}, up_not_down={0.up_not_down}, initial={0.initial}'.format(self)
+        return 'Timer {0.name}: enabled={0.enabled}, up_not_down={0.up_not_down}, \
+                initial={0.initial}'.format(self)
 
     @property
     def name(self):
@@ -108,11 +97,12 @@ class Timer(StateOffset):
     def initial(self, value):
         self.set_ulstate(0, value)
 
-
+#TODO:
+# Needs __str__
 class OutputControl(StateOffset):
-    """There are 5 of these per state."""
+    """There are 6 of these per state."""
     def __init__(self, data, number, state):
-        assert 0 <= number < 5
+        assert 0 <= number < 6
         super(OutputControl, self).__init__(data, number, state)
 
     @property
@@ -139,10 +129,11 @@ class OutputControl(StateOffset):
     def temp_setpoint(self, value):
         self.set_ulstate(4, value)
 
-
+#TODO:
+# Needs __str__
 class ExitCondition(StateOffset):
     def __init__(self, data, number, state):
-        assert 0 <= number < 5
+        assert 0 <= number < 4
         super(ExitCondition, self).__init__(data, number, state)
 
     @property
@@ -272,13 +263,13 @@ class ExitCondition(StateOffset):
 
 
 
-class State(Offset):
-    def __init__(self, data, number):
-        assert 0 <= number < 8, 'Invalid state number'
-        super(State, self).__init__(data, number)
-        self.timers = [Timer(data, x, number) for x in range(4)]
-        self.output = [OutputControl(data, x, number) for x in range(5)]
-        self.exit_conditions = [ExitCondition(data, x, number) for x in range(5)]
+class State(StateOffset):
+    def __init__(self, data, state):
+        assert 0 <= state < 8, 'Invalid state number'
+        super(State, self).__init__(data, state, state)
+        self.timers = [Timer(data, x, state) for x in range(4)]
+        self.output = [OutputControl(data, x, state) for x in range(6)]
+        self.exit_conditions = [ExitCondition(data, x, state) for x in range(4)]
 
     def __str__(self):
         return ('State {0.name}:\n\ttimers={0.timers}\n\toutput={0.output}'
@@ -296,8 +287,6 @@ class State(Offset):
 class Process(object):
     def __init__(self, data):
         self.data = data
-        # this is probably wrong, have to figure out how to query bcs_proc about states.
-        # does it just append their ucstate/ulstate one after the other?
         self.states = [State(data, x) for x in range(8)]
 
     def __getitem__(self, key):
@@ -308,7 +297,7 @@ class Process(object):
 
     @property
     def name(self):
-        return self.data[1]
+        return self.data[1].rstrip()
 
     @name.setter
     def name(self, value):
@@ -316,7 +305,7 @@ class Process(object):
 
     @property
     def state_names(self):
-        return self.data[2:10]
+        return [x.strip() for x in self.data[2:10]]
 
     @state_names.setter
     def state_names(self, values):
@@ -325,7 +314,7 @@ class Process(object):
 
     @property
     def timer_names(self):
-        return self.data[10:14]
+        return [x.strip() for x in self.data[10:14]]
 
     @timer_names.setter
     def timer_names(self, values):
@@ -334,7 +323,7 @@ class Process(object):
 
     @property
     def web_input_names(self):
-        return self.data[14:18]
+        return [x.strip() for x in self.data[14:18]]
 
     @web_input_names.setter
     def web_input_names(self, values):
@@ -350,118 +339,62 @@ class Client(object):
     def __init__(self, address):
         self.address = address
 
-    def get(self, filename, params=None):
+    def get_bcs(self, filename, params=None):
         """Get the "Open interface file" specified as a csv string.
 
         :param str filename: The filename to get
-        :param str params: The parameters string to use '(?p=x&s=y' to get process x state y, maybe).
+        :param str params: The parameters string to use ('?p=x&s=y' to get process x state y, maybe).
         """
         url = '{}/{}'.format(self.address, filename)
         result = requests.get(url, params=params)
-        if not result.ok:
+        if not result.reason == 'OK':
             raise RequestError(result)
         return result.text
 
-    def put_bcs(self, filename, data, params):
+    def post_bcs(self, filename, data, params):
         """Post the "Open interface file" specified"""
         url = '{}/{}'.format(self.address, filename)
         result = requests.post(url, data=data, params=params)
-        if not result.ok:
+        if not result.reason == 'OK':
             raise RequestError(result)
         return result.text
 
-    def get_process_name(self, process_num):
-        """Get the name information about a process.
-        First query the relevant names and pull them out of sysname.dat.
-        Then query the ulstate/ucstate.dat files.
-        """
-        assert 0 <= process_num < 8, 'invalid process number'
-        data = get_bcs('bcs_proc.cfg', params='?p={}&'.format(process_num)).split(',')
-        fields = data.split(',')
-        return {
-            'process_name': fields[1],
-            'state_names': fields[2:10],
-            'timer_names': fields[10:14],
-            'web_input_names': fields[14:18]
-        }
-
-    def get_state_info(self, process_num, state_num):
-        """Each process has 8 states.
-
-        TODO: Instead of just lists, build thesem into some more useful representation.
-        """
-        # TODO: Figure out which temperature/output sensors are used and stub out the fields
-        # with a marker. Then do the reverse on set_state_info
-        params = 'p={}&s={}'.format(process_num, state_num)
-        return {
-            'ulstate': self.get_bcs('ulstate.dat', params).split(','),
-            'ucstate': self.get_bcs('ucstate.dat', params).split(',')
-        }
-
-
     def get_process(self, process_num):
-        """Return a process as a dictionary.
+        """Return a process object for the requested process number.
 
-        TODO: Figure out how bcs_proc.cfg is laid out. Is it just appended?
-        It might be easier to use that than to use the individual docs. But
-        first we have to figure out if they're just concatenated or if they
-        have separators, etc. Check w/ actual BCS unit.
+        :param process_num: The number of the requested process
+        :type process_num: int
 
-        TODO: The way bcs_proc.cfg is laid out
-            - the defined header stuff
-            - ucstate.dat for state 0
-            - ucstate.dat for state ...
-            - ulstate.dat for state 0
-            - ulstate.dat for state ...
+        :return: A populated process object
+        :rtype: Process
         """
-        return {
-            'names': self.get_process_name(process_num),
-            'states': [self.get_state_info(process_num, state_num)
-                       for state_num in range(8)]
-        }
 
-    def set_process_name(self, process_num, process):
-        """Set the name information about a process.
-        First query the existing information, then replace that with new information.
-        """
-        data = self.get_bcs('bcs_proc.cfg')
+        if not 0 <= process_num < 8:
+            raise IllegalRequestError({'name':'Process number', 'val':process_num})
+
+        data = get_bcs('bcs_proc.cfg', params='?p={}&'.format(process_num))
         fields = data.split(',')
-        fields[1] = process['process_name']
-        fields = itertools.chain(
-            enumerate(process['state_names'], start=2),
-            enumerate(process['timer_names'], start=10),
-            enumerate(process['web_input_names'], start=14)
-        )
-        newdata = ','.join(fields)
-        # PUT the new list. the params field is required.
-        # TODO: TEST: It may be required as a parameter instead of data? Docs are unclear.
-        # can't use dict form of params because order matters (wtf) and you can't get ?data& that way.
-        self.put_bcs('sysname.dat', newdata, params='data&p=0&s=0')
+        return Process(fields)
 
-
-    def set_state_info(self, process_num, state_num, state_data):
-        """Set the state info."""
-        params = 'p={}&s={}'.format(process_num, state_num)
-        self.put_bcs('ulstate.dat', ','.join(state_data['ulstate']), params)
-        self.put_bcs('ucstate.dat', ','.join(state_data['ucstate']), params)
-
-    def set_process(self, process_num, process_data):
-        """Set a process based on the given data.
-
-        TODO: Same considerations as get_process
+    def set_process(self, process_num, process):
+        """Post the given process to the BCS under the given process number.
+        
+        :param process_num: The number to post the process to
+        :type process_num: int
+        :param process: The process to post
+        :type process: Process
         """
-        self.set_process_name(process_num, process_data['names'])
-        for state_num, state_data in enumerate(process_num['states']):
-            self.set_state_info(process_num, state_num, state_data)
+
+        if not 0 <= process_num < 8:
+            raise IllegalRequestError({'name':'Process number', 'val':process_num})
+        post_bcs('bcs_proc.cfg', data=process.data, params='?data&p={0}&s={0}&'.format(process_num))
 
     def get_process_to_file(self, process_num, path):
-        process_data = self.get_process(process_num)
+        process_data = self.get_process(process_num).data
         with open(path, 'w') as fp:
             json.dump(process_data, fp)
 
     def set_process_from_file(self, process_num, path):
         with open(path, 'r') as fp:
             process_data = json.load(fp)
-        self.set_process(process_num, process_data)
-
-
+        self.set_process(process_num, Process(process_data))
